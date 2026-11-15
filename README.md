@@ -116,10 +116,11 @@ const issuer = createTestOidcIssuer({ basePath: "/oidc" })
 const login = createOidcLogin({
   issuerUrl: issuer.getIssuerUrl("https://app.example.com"),
   clientId: "client-1",
-  fetch: (url, init) => issuer.fetch(new Request(url, init)),
+  fetch: issuer.fetch,
 })
 
 const { url, flow } = await login.start({ redirectUri: "https://app.example.com/auth/callback" })
-const callback = await issuer.fetch(new Request(url))
-const user = await login.finish(flow, callback.headers.get("location")!)
+const user = await login.finish(flow, await issuer.authorize(url))
 ```
+
+`issuer.authorize` opens the authorization URL instead of a browser and returns the callback URL.

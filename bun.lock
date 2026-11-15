@@ -14,7 +14,7 @@
         "@tsconfig/bun": "^1.0.12",
         "@types/bun": "^1.4.4",
         "changesets-local": "^1.6.0",
-        "oidc-test-issuer": "^1.0.0",
+        "oidc-test-issuer": "^1.1.0",
         "oxfmt": "^0.78.0",
         "oxlint": "^1.93.0",
         "publint": "^0.3.25",
@@ -450,7 +450,7 @@
 
     "obug": ["obug@3.0.0", "", {}, "sha512-5vvB5+W7ePv+p3uqxi+RcW1XAzLW0/hxt3/4X4Lc4qHudzOhmBiBwOY6DRob4WnanAEGvNcLjF+KNOufrUoEQw=="],
 
-    "oidc-test-issuer": ["oidc-test-issuer@1.0.0", "", { "dependencies": { "jose": "^6.2.17" } }, "sha512-pwxj6rzjepsvwXbs7YUM1O07McM6qBcCFgCbrEkPkj7bPOhuUeheI4C71fog6vUz1FvwwoynvscKtUjfZBLFIg=="],
+    "oidc-test-issuer": ["oidc-test-issuer@1.1.0", "", { "dependencies": { "jose": "^6.2.17" } }, "sha512-nxeNCuxS10UAr8Dml9PwSgG3qvlydZ7+e20pTCbY6x79h+XNmEySiXcQucEZpcrVgJCe0La7HbpVFoYHnjYnwg=="],
 
     "openid-client": ["openid-client@6.9.0", "", { "dependencies": { "jose": "^6.2.15", "oauth4webapi": "^3.8.8" } }, "sha512-2IvamJR8PAnWHngaCsGGA8TYfcLI2egvuqa9cOQYHIISwIUhxJwwwcCnkgVX95fzZ6J0TAna0aVGUMOxnPeRqg=="],
 

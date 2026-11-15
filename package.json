@@ -44,7 +44,7 @@
     "@tsconfig/bun": "^1.0.12",
     "@types/bun": "^1.4.4",
     "changesets-local": "^1.6.0",
-    "oidc-test-issuer": "^1.0.0",
+    "oidc-test-issuer": "^1.1.0",
     "oxfmt": "^0.78.0",
     "oxlint": "^1.93.0",
     "publint": "^0.3.25",

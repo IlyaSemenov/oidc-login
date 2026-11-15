@@ -23,7 +23,7 @@ function createLogin({
     clientSecret: "secret-1",
     fetch: async (url, init) => {
       // The issuer and the interceptor each read their own copy of the request body.
-      return await intercept(new Request(url, init), await issuer.fetch(new Request(url, init)))
+      return await intercept(new Request(url, init), await issuer.fetch(url, init))
     },
     ...options,
   })
@@ -44,8 +44,7 @@ function rewriteJson(
 /** Starts a sign-in and follows the authorization URL to the callback URL. */
 async function authorize({ issuer, login }: ReturnType<typeof createLogin>, loginHint?: string) {
   const { url, flow } = await login.start({ redirectUri, loginHint })
-  const response = await issuer.fetch(new Request(url))
-  return { flow, callbackUrl: new URL(response.headers.get("location")!) }
+  return { flow, callbackUrl: new URL(await issuer.authorize(url)) }
 }
 
 describe("sign-in", () => {
@@ -355,7 +354,7 @@ describe("discovery", () => {
     const login = createOidcLogin({
       issuerUrl: issuer.getIssuerUrl("http://app.localhost:3000"),
       clientId: "client-1",
-      fetch: (url, init) => issuer.fetch(new Request(url, init)),
+      fetch: issuer.fetch,
     })
 
     await login.discover()
@@ -368,7 +367,7 @@ describe("discovery", () => {
       issuerUrl: issuer.getIssuerUrl(origin),
       clientId: "client-1",
       fetch: async (url, init) =>
-        available ? issuer.fetch(new Request(url, init)) : new Response(null, { status: 503 }),
+        available ? issuer.fetch(url, init) : new Response(null, { status: 503 }),
     })
 
     await expect(login.discover()).rejects.toMatchObject({ code: "discovery_failed" })
@@ -403,7 +402,7 @@ describe("discovery", () => {
         issuerUrl: issuer.getIssuerUrl("http://app.localhost:3000"),
         clientId: "client-1",
         fetch: async (url, init) =>
-          await intercept(new Request(url, init), await issuer.fetch(new Request(url, init))),
+          await intercept(new Request(url, init), await issuer.fetch(url, init)),
       })
     }
 
@@ -444,7 +443,7 @@ describe("discovery", () => {
     const login = createOidcLogin({
       issuerUrl: issuer.getIssuerUrl("http://app.example.com"),
       clientId: "client-1",
-      fetch: (url, init) => issuer.fetch(new Request(url, init)),
+      fetch: issuer.fetch,
     })
 
     await expect(login.discover()).rejects.toMatchObject({ code: "discovery_failed" })
