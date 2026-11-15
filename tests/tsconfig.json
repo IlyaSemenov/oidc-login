@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig",
+  "compilerOptions": {
+    "paths": {
+      "oidc-login": ["../src"]
+    }
+  },
+  "include": ["**/*.ts"]
+}
