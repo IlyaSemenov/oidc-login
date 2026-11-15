@@ -177,6 +177,109 @@ describe("client authentication", () => {
   })
 })
 
+describe("client check", () => {
+  const challenge = { "www-authenticate": 'Basic realm="oidc"' }
+
+  /** Answers token requests with an OAuth error instead of the issuer. */
+  function rejectTokenRequest(
+    status: number,
+    body: object,
+    headers?: Record<string, string>,
+  ): Intercept {
+    return (request, response) =>
+      new URL(request.url).pathname === "/oidc/token"
+        ? Response.json(body, { status, headers })
+        : response
+  }
+
+  /** Rejects token requests whose client credentials differ from `client-1:secret-1`, as a provider that checks the secret does. */
+  const authenticateClient: Intercept = async (request, response) => {
+    if (new URL(request.url).pathname !== "/oidc/token") {
+      return response
+    }
+
+    const body = new URLSearchParams(await request.text())
+    const [, encoded] = request.headers.get("authorization")?.split(" ") ?? []
+    // OAuth clients form-encode the credentials before Base64.
+    const credentials = encoded
+      ? atob(encoded).split(":").map(decodeURIComponent)
+      : [body.get("client_id"), body.get("client_secret")]
+    return credentials.join(":") === "client-1:secret-1"
+      ? response
+      : Response.json({ error: "invalid_client" }, { status: 401, headers: challenge })
+  }
+
+  test.each(["client_secret_basic", "client_secret_post"] as const)(
+    "resolves when the provider accepts the client with %s",
+    async clientAuthentication => {
+      const { login } = createLogin({ clientAuthentication, intercept: authenticateClient })
+
+      await login.checkClient({ redirectUri })
+    },
+  )
+
+  test.each(["client_secret_basic", "client_secret_post"] as const)(
+    "rejects a wrong client secret with %s",
+    async clientAuthentication => {
+      const { login } = createLogin({
+        clientAuthentication,
+        clientSecret: "wrong",
+        intercept: authenticateClient,
+      })
+
+      await expect(login.checkClient({ redirectUri })).rejects.toMatchObject({
+        code: "client_rejected",
+        error: "invalid_client",
+      })
+    },
+  )
+
+  test.each([
+    ["unauthorized_client in the body", 400, { error: "unauthorized_client" }, undefined],
+    ["unauthorized_client with a challenge", 401, { error: "unauthorized_client" }, challenge],
+  ])("rejects the client when the provider answers %s", async (_kind, status, body, headers) => {
+    const { login } = createLogin({ intercept: rejectTokenRequest(status, body, headers) })
+
+    await expect(login.checkClient({ redirectUri })).rejects.toMatchObject({
+      code: "client_rejected",
+      error: "unauthorized_client",
+    })
+  })
+
+  test("rejects the client on a challenge without an error code", async () => {
+    const { login } = createLogin({ intercept: rejectTokenRequest(401, {}, challenge) })
+
+    const error = await login.checkClient({ redirectUri }).catch((error: unknown) => error)
+
+    expect(error).toMatchObject({ code: "client_rejected" })
+    expect((error as OidcLoginError).error).toBeUndefined()
+  })
+
+  test("keeps the body of a challenge response readable in the cause", async () => {
+    const body = { error: "invalid_request", error_description: "Missing parameter." }
+    const { login } = createLogin({ intercept: rejectTokenRequest(401, body, challenge) })
+
+    const error = await login.checkClient({ redirectUri }).catch((error: unknown) => error)
+
+    const { cause } = error as OidcLoginError
+    expect(await (cause as { response: Response }).response.json()).toEqual(body)
+  })
+
+  test.each([
+    ["in the body", 400, undefined],
+    ["with a challenge", 401, challenge],
+  ])("reports an inconclusive answer %s", async (_kind, status, headers) => {
+    const { login } = createLogin({
+      intercept: rejectTokenRequest(status, { error: "invalid_request" }, headers),
+    })
+
+    await expect(login.checkClient({ redirectUri })).rejects.toMatchObject({
+      code: "client_check_failed",
+      error: "invalid_request",
+    })
+  })
+})
+
 describe("UserInfo", () => {
   const getUser: GetTestOidcUser = () => ({
     sub: "user-1",

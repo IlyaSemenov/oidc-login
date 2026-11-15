@@ -69,6 +69,12 @@ export interface OidcLogin {
   finish: (flow: OidcLoginFlow, callback: URL | URLSearchParams | string) => Promise<OidcUser>
   /** Fetches the issuer metadata to check the issuer URL. */
   discover: () => Promise<void>
+  /**
+   * Checks that the provider accepts the client ID and secret, without a user.
+   *
+   * It exchanges a made-up authorization code for `redirectUri` and resolves when the provider rejects only the code.
+   */
+  checkClient: (options: { redirectUri: string | URL }) => Promise<void>
 }
 
 const defaultScope = ["openid", "email", "profile"]
@@ -107,13 +113,7 @@ export function createOidcLogin({
 
   return {
     async start({ redirectUri, loginHint }) {
-      // openid-client sends the redirect URI of the token request without its query, which would not match the authorization request.
-      const redirectUrl = new URL(redirectUri)
-      // `search` and `hash` are empty for a bare `?` or `#`, which openid-client drops as well.
-      if (/[?#]/.test(redirectUrl.href)) {
-        throw new TypeError("The redirect URI must have no query or fragment.")
-      }
-
+      const redirectUrl = parseRedirectUri(redirectUri)
       const config = await getConfiguration()
       const codeVerifier = client.randomPKCECodeVerifier()
       const flow: OidcLoginFlow = {
@@ -182,6 +182,74 @@ export function createOidcLogin({
     async discover() {
       await getConfiguration()
     },
+
+    async checkClient({ redirectUri }) {
+      const redirectUrl = parseRedirectUri(redirectUri)
+      const config = await getConfiguration()
+
+      // Providers authenticate the client before they look at the code, so the error tells whether the client is accepted.
+      const failure = await client
+        .genericGrantRequest(config, "authorization_code", {
+          code: client.randomState(),
+          redirect_uri: redirectUrl.href,
+          code_verifier: client.randomPKCECodeVerifier(),
+        })
+        .then(
+          () => undefined,
+          (cause: unknown) => cause,
+        )
+
+      const error = await readOAuthError(failure)
+      if (error === "invalid_grant") {
+        return
+      }
+
+      const rejected =
+        // `unauthorized_client` means that the client may not use the authorization code flow, so logins fail as well.
+        error === "invalid_client" ||
+        error === "unauthorized_client" ||
+        // A provider answers a failed client authentication with 401 and a challenge, which may name no error.
+        (error === undefined &&
+          failure instanceof client.WWWAuthenticateChallengeError &&
+          failure.status === 401)
+      throw new OidcLoginError(rejected ? "client_rejected" : "client_check_failed", {
+        cause: failure,
+        error,
+      })
+    },
+  }
+}
+
+/**
+ * Parses the redirect URI of a sign-in.
+ *
+ * It must have no query or fragment: openid-client sends the redirect URI of the token request without its query, which would not match the authorization request.
+ */
+function parseRedirectUri(redirectUri: string | URL): URL {
+  const redirectUrl = new URL(redirectUri)
+  // `search` and `hash` are empty for a bare `?` or `#`, which openid-client drops as well.
+  if (/[?#]/.test(redirectUrl.href)) {
+    throw new TypeError("The redirect URI must have no query or fragment.")
+  }
+  return redirectUrl
+}
+
+/** Reads the OAuth error code of a failed token request from its JSON body or its `WWW-Authenticate` challenge. */
+async function readOAuthError(failure: unknown): Promise<string | undefined> {
+  if (failure instanceof client.ResponseBodyError) {
+    return failure.error
+  }
+  if (failure instanceof client.WWWAuthenticateChallengeError) {
+    // oauth4webapi throws on the challenge before it reads the body, which may hold the error code.
+    // A copy is read to keep the body of `cause` for the caller, such as its `error_description`.
+    const body: unknown = await failure.response
+      .clone()
+      .json()
+      .catch(() => undefined)
+    if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+      return body.error
+    }
+    return failure.cause.find(challenge => challenge.parameters.error)?.parameters.error
   }
 }
 

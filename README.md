@@ -82,6 +82,19 @@ await createOidcLogin({ issuerUrl, clientId }).discover()
 The issuer URL must use HTTPS; plain HTTP works only on loopback hosts, such as `localhost`, for local development.
 Validate a URL that users enter with `isSecureIssuerUrl`.
 
+Call `checkClient` with your redirect URI to check the client ID and secret as well, without signing anyone in:
+
+```ts
+await createOidcLogin({ issuerUrl, clientId, clientSecret }).checkClient({ redirectUri })
+```
+
+It exchanges a made-up code and expects the provider to reject only the code.
+When the provider rejects the client, it rejects with `OidcLoginError` with the `client_rejected` code; when the response of the provider is inconclusive, with `client_check_failed`.
+The OAuth error of the provider, if any, is in `error`.
+
+The provider sees each check as a failed code exchange: it may log it as an error and count it against its rate limits.
+Call `checkClient` when an administrator checks the settings, not as a periodic health check.
+
 ## Options
 
 - `scope`: scopes to request besides `openid`, `email`, and `profile`.
