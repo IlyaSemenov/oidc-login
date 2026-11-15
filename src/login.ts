@@ -284,22 +284,33 @@ async function discover({
   )
 
   // openid-client accepts metadata with missing or invalid endpoints, but then the sign-in fails later with a generic error.
-  const { authorization_endpoint, token_endpoint } = config.serverMetadata()
+  const { authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri } =
+    config.serverMetadata()
   if (
-    ![authorization_endpoint, token_endpoint].every(endpoint => isEndpointUrl(endpoint, insecure))
+    ![authorization_endpoint, token_endpoint].every(endpoint =>
+      isEndpointUrl(endpoint, insecure),
+    ) ||
+    // These receive the access token or provide the keys of the ID token, so they need the same protection.
+    ![userinfo_endpoint, jwks_uri].every(
+      endpoint => endpoint === undefined || isEndpointUrl(endpoint, insecure),
+    )
   ) {
-    throw new Error("The issuer metadata has no valid authorization or token endpoint.")
+    throw new Error("The issuer metadata has an invalid endpoint.")
   }
 
   return config
 }
 
-/** Checks that an endpoint from the issuer metadata is an absolute URL with an allowed protocol. */
+/**
+ * Checks that an endpoint from the issuer metadata is an absolute URL with an allowed protocol.
+ *
+ * A plain HTTP issuer on a loopback host may name HTTPS endpoints or plain HTTP endpoints on loopback hosts, so that the client secret and tokens do not leave the machine unencrypted.
+ */
 function isEndpointUrl(value: unknown, insecure: boolean): boolean {
   if (typeof value !== "string" || !URL.canParse(value)) {
     return false
   }
 
-  const { protocol } = new URL(value)
-  return protocol === "https:" || (insecure && protocol === "http:")
+  const { protocol, hostname } = new URL(value)
+  return protocol === "https:" || (insecure && protocol === "http:" && isLoopbackHostname(hostname))
 }

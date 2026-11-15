@@ -392,6 +392,53 @@ describe("discovery", () => {
     await expect(login.start({ redirectUri })).rejects.toMatchObject({ code: "discovery_failed" })
   })
 
+  describe("of a loopback issuer", () => {
+    /** Creates a login through a plain HTTP issuer on a loopback host whose metadata `rewrite` changes. */
+    function createLoopbackLogin(
+      rewrite: (body: Record<string, unknown>) => Record<string, unknown>,
+    ) {
+      const issuer = createTestOidcIssuer({ basePath: "/oidc" })
+      const intercept = rewriteJson("/.well-known/openid-configuration", rewrite)
+      return createOidcLogin({
+        issuerUrl: issuer.getIssuerUrl("http://app.localhost:3000"),
+        clientId: "client-1",
+        fetch: async (url, init) =>
+          await intercept(new Request(url, init), await issuer.fetch(new Request(url, init))),
+      })
+    }
+
+    test.each(["authorization_endpoint", "token_endpoint", "userinfo_endpoint", "jwks_uri"])(
+      "rejects a plain HTTP %s on a non-loopback host",
+      async endpoint => {
+        const login = createLoopbackLogin(body => ({
+          ...body,
+          [endpoint]: "http://idp.example.com/oidc/endpoint",
+        }))
+
+        await expect(login.discover()).rejects.toMatchObject({ code: "discovery_failed" })
+      },
+    )
+
+    test.each([
+      ["an HTTPS endpoint on another host", "https://idp.example.com/oidc/token"],
+      ["a plain HTTP endpoint on another loopback host", "http://127.0.0.1:3001/oidc/token"],
+    ])("accepts %s", async (_kind, tokenEndpoint) => {
+      const login = createLoopbackLogin(body => ({ ...body, token_endpoint: tokenEndpoint }))
+
+      await login.discover()
+    })
+
+    test("accepts metadata without UserInfo and JWKS endpoints", async () => {
+      const login = createLoopbackLogin(body => ({
+        ...body,
+        userinfo_endpoint: undefined,
+        jwks_uri: undefined,
+      }))
+
+      await login.discover()
+    })
+  })
+
   test("rejects a plain HTTP issuer on another host", async () => {
     const issuer = createTestOidcIssuer({ basePath: "/oidc" })
     const login = createOidcLogin({
