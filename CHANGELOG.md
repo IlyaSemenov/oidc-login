@@ -1,5 +1,11 @@
 # oidc-login
 
+## 1.2.0
+
+### Minor Changes
+
+- 35bb2e5: `discover` returns the issuer metadata, and the `metadata` option reuses it, such as from a cache shared by several processes, without fetching it again.
+
 ## 1.1.1
 
 ### Patch Changes
