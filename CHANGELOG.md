@@ -1,5 +1,11 @@
 # oidc-login
 
+## 1.3.0
+
+### Minor Changes
+
+- 7492cea: Add the `email` mode of the `userinfo` option, which requests UserInfo only when the ID token has no email, for applications that do not use `emailVerified`.
+
 ## 1.2.0
 
 ### Minor Changes
