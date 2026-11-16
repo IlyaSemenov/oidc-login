@@ -59,6 +59,25 @@ Before you link the sign-in to an existing account by email, check `emailVerifie
 
 Reuse the instance for the same provider settings: it fetches the issuer metadata once, on first use.
 
+## Cache the issuer metadata
+
+To avoid fetching the issuer metadata in every process or on every sign-in, cache what `discover` returns and pass it as `metadata`:
+
+```ts
+const metadata = await createOidcLogin({ issuerUrl, clientId }).discover()
+await cache.set(issuerUrl, metadata)
+
+const login = createOidcLogin({
+  issuerUrl,
+  clientId,
+  clientSecret,
+  metadata: await cache.get(issuerUrl),
+})
+```
+
+The metadata is a plain JSON object.
+Keep it per issuer URL and refresh it from time to time: the provider may change its endpoints.
+
 ## Handle errors
 
 `start` and `finish` reject with `OidcLoginError`, whose `code` names the failed stage:

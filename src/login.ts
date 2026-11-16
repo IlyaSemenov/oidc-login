@@ -20,6 +20,12 @@ export type OidcUserinfoMode = "auto" | "always" | "never"
 /** How a client with a secret authenticates to the token endpoint. */
 export type OidcClientAuthentication = "client_secret_basic" | "client_secret_post"
 
+/** Issuer metadata that `discover` returns: a plain JSON object. */
+export interface OidcIssuerMetadata {
+  issuer: string
+  [key: string]: unknown
+}
+
 /** Options of `createOidcLogin`. */
 export interface OidcLoginOptions {
   /** Issuer URL: HTTPS, or plain HTTP on a loopback host. */
@@ -35,6 +41,12 @@ export interface OidcLoginOptions {
   userinfo?: OidcUserinfoMode
   /** Sends the HTTP requests to the provider instead of the global `fetch`, such as to a test issuer. */
   fetch?: OidcFetch
+  /**
+   * Issuer metadata that `discover` returned for the same issuer URL, to use instead of fetching it.
+   *
+   * If the supplied metadata fails discovery validation, such as when it belongs to another issuer URL, the instance fetches fresh metadata from the provider.
+   */
+  metadata?: OidcIssuerMetadata
 }
 
 /**
@@ -67,8 +79,12 @@ export interface OidcLogin {
    * Pass the full callback URL, its query string, or its parameters.
    */
   finish: (flow: OidcLoginFlow, callback: URL | URLSearchParams | string) => Promise<OidcUser>
-  /** Fetches the issuer metadata to check the issuer URL. */
-  discover: () => Promise<void>
+  /**
+   * Fetches the issuer metadata, unless the instance has it, and returns it.
+   *
+   * Pass the result as the `metadata` option to create an instance that does not fetch it again.
+   */
+  discover: () => Promise<OidcIssuerMetadata>
   /**
    * Checks that the provider accepts the client ID and secret, without a user.
    *
@@ -82,7 +98,7 @@ const defaultScope = ["openid", "email", "profile"]
 /**
  * Creates an OpenID Connect login handler for one provider: the authorization code flow with PKCE, state, and nonce.
  *
- * The instance fetches the issuer metadata once, on first use; after a failed fetch, the next call fetches it again.
+ * The instance fetches the issuer metadata once, on first use, unless valid `metadata` is supplied; after a failed fetch, the next call fetches it again.
  * Methods reject with `OidcLoginError` when the sign-in fails, and with `TypeError` for invalid arguments.
  */
 export function createOidcLogin({
@@ -93,18 +109,28 @@ export function createOidcLogin({
   scope = [],
   userinfo = "auto",
   fetch,
+  metadata,
 }: OidcLoginOptions): OidcLogin {
   const issuer = new URL(issuerUrl)
+  // openid-client rejects plain HTTP unless allowed explicitly; it is allowed only for local development.
+  const insecure = issuer.protocol === "http:" && isLoopbackHostname(issuer.hostname)
+  const settings: IssuerSettings = {
+    issuer,
+    insecure,
+    clientId,
+    clientSecret,
+    clientAuthentication,
+    fetch,
+  }
   let configuration: Promise<client.Configuration> | undefined
 
   const getConfiguration = () => {
-    configuration ??= discover({
-      issuer,
-      clientId,
-      clientSecret,
-      clientAuthentication,
-      fetch,
-    }).catch((cause: unknown) => {
+    configuration ??= (
+      metadata
+        ? // Metadata that fails the checks of discovery, such as of another issuer URL, is fetched again.
+          discover(settings, metadata).catch(() => discover(settings))
+        : discover(settings)
+    ).catch((cause: unknown) => {
       configuration = undefined
       throw new OidcLoginError("discovery_failed", { cause })
     })
@@ -180,7 +206,8 @@ export function createOidcLogin({
     },
 
     async discover() {
-      await getConfiguration()
+      const { supportsPKCE: _, ...metadata } = (await getConfiguration()).serverMetadata()
+      return metadata
     },
 
     async checkClient({ redirectUri }) {
@@ -253,52 +280,78 @@ async function readOAuthError(failure: unknown): Promise<string | undefined> {
   }
 }
 
-async function discover({
-  issuer,
-  clientId,
-  clientSecret,
-  clientAuthentication,
-  fetch,
-}: {
+/** Settings of the issuer and the client that the configuration of an instance needs. */
+interface IssuerSettings {
   issuer: URL
+  /** Whether plain HTTP is allowed: the issuer is a plain HTTP URL on a loopback host. */
+  insecure: boolean
   clientId: string
-  clientSecret: string | undefined
+  clientSecret?: string
   clientAuthentication: OidcClientAuthentication
-  fetch: OidcFetch | undefined
-}): Promise<client.Configuration> {
-  // openid-client rejects plain HTTP unless allowed explicitly; it is allowed only for local development.
-  const insecure = issuer.protocol === "http:" && isLoopbackHostname(issuer.hostname)
+  fetch?: OidcFetch
+}
+
+/**
+ * Fetches the issuer metadata, or takes `metadata` that `discover` returned earlier, and creates the configuration from it.
+ *
+ * Cached metadata goes through openid-client discovery as its response, so that it gets the same checks and the provider-specific handling that openid-client keeps in its private state, such as for the issuer of Microsoft Entra ID.
+ */
+async function discover(
+  { issuer, insecure, clientId, clientSecret, clientAuthentication, fetch }: IssuerSettings,
+  metadata?: OidcIssuerMetadata,
+): Promise<client.Configuration> {
   const config = await client.discovery(
     issuer,
     clientId,
     clientSecret,
-    clientSecret === undefined
-      ? client.None()
-      : clientAuthentication === "client_secret_basic"
-        ? client.ClientSecretBasic(clientSecret)
-        : client.ClientSecretPost(clientSecret),
+    getClientAuth(clientSecret, clientAuthentication),
     {
-      ...(fetch ? { [client.customFetch]: fetch } : {}),
+      ...(metadata
+        ? { [client.customFetch]: async () => Response.json(metadata) }
+        : fetch
+          ? { [client.customFetch]: fetch }
+          : {}),
       ...(insecure ? { execute: [client.allowInsecureRequests] } : {}),
     },
   )
+  if (metadata) {
+    // The configuration keeps the fetch of discovery, which only returns `metadata`.
+    config[client.customFetch] = fetch ?? ((url, options) => globalThis.fetch(url, options))
+  }
 
-  // openid-client accepts metadata with missing or invalid endpoints, but then the sign-in fails later with a generic error.
-  const { authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri } =
-    config.serverMetadata()
-  if (
-    ![authorization_endpoint, token_endpoint].every(endpoint =>
-      isEndpointUrl(endpoint, insecure),
-    ) ||
-    // These receive the access token or provide the keys of the ID token, so they need the same protection.
-    ![userinfo_endpoint, jwks_uri].every(
-      endpoint => endpoint === undefined || isEndpointUrl(endpoint, insecure),
-    )
-  ) {
+  if (!hasValidEndpoints(config.serverMetadata(), insecure)) {
     throw new Error("The issuer metadata has an invalid endpoint.")
   }
 
   return config
+}
+
+/** Selects how openid-client authenticates the client: a client without a secret is public. */
+function getClientAuth(
+  clientSecret: string | undefined,
+  clientAuthentication: OidcClientAuthentication,
+): client.ClientAuth {
+  return clientSecret === undefined
+    ? client.None()
+    : clientAuthentication === "client_secret_basic"
+      ? client.ClientSecretBasic(clientSecret)
+      : client.ClientSecretPost(clientSecret)
+}
+
+/**
+ * Checks the endpoints of the issuer metadata.
+ *
+ * openid-client accepts metadata with missing or invalid endpoints, but then the sign-in fails later with a generic error.
+ */
+function hasValidEndpoints(metadata: Record<string, unknown>, insecure: boolean): boolean {
+  const { authorization_endpoint, token_endpoint, userinfo_endpoint, jwks_uri } = metadata
+  return (
+    [authorization_endpoint, token_endpoint].every(endpoint => isEndpointUrl(endpoint, insecure)) &&
+    // These receive the access token or provide the keys of the ID token, so they need the same protection.
+    [userinfo_endpoint, jwks_uri].every(
+      endpoint => endpoint === undefined || isEndpointUrl(endpoint, insecure),
+    )
+  )
 }
 
 /**

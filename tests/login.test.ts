@@ -438,6 +438,145 @@ describe("discovery", () => {
     })
   })
 
+  describe("metadata", () => {
+    /** Creates a login that counts the requests of the issuer metadata. */
+    function createCountingLogin(options: Partial<OidcLoginOptions> = {}) {
+      const counter = { discoveries: 0 }
+      const context = createLogin({
+        intercept: (request, response) => {
+          if (new URL(request.url).pathname === "/oidc/.well-known/openid-configuration") {
+            counter.discoveries++
+          }
+          return response
+        },
+        ...options,
+      })
+      return { ...context, counter }
+    }
+
+    test("returns the issuer metadata as a plain JSON object", async () => {
+      const { login } = createLogin()
+
+      const metadata = await login.discover()
+
+      expect(metadata.issuer).toBe(`${origin}/oidc`)
+      expect(JSON.parse(JSON.stringify(metadata))).toEqual(metadata)
+    })
+
+    test("signs in with the metadata without fetching it", async () => {
+      const metadata = await createLogin().login.discover()
+      const context = createCountingLogin({ metadata })
+
+      const { flow, callbackUrl } = await authorize(context)
+      const user = await context.login.finish(flow, callbackUrl)
+
+      expect(user.sub).toBe(defaultTestOidcUser.sub)
+      expect(context.counter.discoveries).toBe(0)
+    })
+
+    test("returns the metadata it got without fetching it", async () => {
+      const metadata = await createLogin().login.discover()
+      const { login, counter } = createCountingLogin({ metadata })
+
+      expect(await login.discover()).toEqual(metadata)
+      expect(counter.discoveries).toBe(0)
+    })
+
+    test("of a plain HTTP issuer on a loopback host signs in", async () => {
+      const issuer = createTestOidcIssuer({ basePath: "/oidc" })
+      const options = {
+        issuerUrl: issuer.getIssuerUrl("http://app.localhost:3000"),
+        clientId: "client-1",
+        fetch: issuer.fetch,
+      }
+      const metadata = await createOidcLogin(options).discover()
+      const login = createOidcLogin({ ...options, metadata })
+
+      const { url, flow } = await login.start({ redirectUri })
+      const user = await login.finish(flow, await issuer.authorize(url))
+
+      expect(user.sub).toBe(defaultTestOidcUser.sub)
+    })
+
+    test.each([
+      ["another issuer", { issuer: "https://idp.example.com/oidc" }],
+      ["a plain HTTP token endpoint", { token_endpoint: "http://app.example.com/oidc/token" }],
+      ["no authorization endpoint", { authorization_endpoint: undefined }],
+    ])("with %s is fetched again", async (_kind, override) => {
+      const metadata = await createLogin().login.discover()
+      const { login, counter } = createCountingLogin({ metadata: { ...metadata, ...override } })
+
+      expect(await login.discover()).toEqual(metadata)
+      expect(counter.discoveries).toBe(1)
+    })
+
+    test.each(["http://app.example.com", "ftp://app.example.com"])(
+      "does not make the issuer URL %s acceptable",
+      async origin => {
+        const issuer = createTestOidcIssuer({ basePath: "/oidc" })
+        const metadata = await createOidcLogin({
+          issuerUrl: issuer.getIssuerUrl("https://app.example.com"),
+          clientId: "client-1",
+          fetch: issuer.fetch,
+        }).discover()
+        const issuerUrl = `${origin}/oidc`
+        const login = createOidcLogin({
+          issuerUrl,
+          clientId: "client-1",
+          fetch: issuer.fetch,
+          metadata: { ...metadata, issuer: issuerUrl },
+        })
+
+        await expect(login.start({ redirectUri })).rejects.toMatchObject({
+          code: "discovery_failed",
+        })
+      },
+    )
+
+    test("of the Microsoft Entra ID common endpoint signs in without fetching it", async () => {
+      const entraOrigin = "https://login.microsoftonline.com"
+      const tenantIssuer = createTestOidcIssuer({
+        basePath: "/tenant-1/v2.0",
+        getUser: () => ({ sub: "user-1", claims: { tid: "tenant-1" } }),
+      })
+      // Like Microsoft Entra ID, the common endpoint names an issuer template and returns no `iss` in the authorization response.
+      const intercept = rewriteJson("/.well-known/openid-configuration", body => ({
+        ...body,
+        issuer: `${entraOrigin}/{tenantid}/v2.0`,
+        authorization_response_iss_parameter_supported: false,
+      }))
+      let discoveries = 0
+      const options = {
+        issuerUrl: `${entraOrigin}/common/v2.0`,
+        clientId: "client-1",
+        fetch: async (url: string, init: RequestInit) => {
+          const { pathname } = new URL(url)
+          if (pathname === "/common/v2.0/.well-known/openid-configuration") {
+            discoveries++
+            const response = await tenantIssuer.fetch(
+              `${entraOrigin}/tenant-1/v2.0/.well-known/openid-configuration`,
+            )
+            return await intercept(
+              new Request(`${entraOrigin}/oidc/.well-known/openid-configuration`),
+              response,
+            )
+          }
+          return await tenantIssuer.fetch(url, init)
+        },
+      }
+      const metadata = JSON.parse(JSON.stringify(await createOidcLogin(options).discover()))
+      const login = createOidcLogin({ ...options, metadata })
+
+      const { url, flow } = await login.start({ redirectUri })
+      const callbackUrl = new URL(await tenantIssuer.authorize(url))
+      callbackUrl.searchParams.delete("iss")
+      const user = await login.finish(flow, callbackUrl)
+
+      expect(user.sub).toBe("user-1")
+      expect(discoveries).toBe(1)
+    })
+  })
+
   test("rejects a plain HTTP issuer on another host", async () => {
     const issuer = createTestOidcIssuer({ basePath: "/oidc" })
     const login = createOidcLogin({
