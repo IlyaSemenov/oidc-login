@@ -2,7 +2,7 @@ import * as client from "openid-client"
 
 import { OidcLoginError } from "./errors"
 import { isLoopbackHostname } from "./issuer-url"
-import type { OidcUser } from "./user"
+import type { OidcUser, StandardClaims } from "./user"
 import { createOidcUser, readStandardClaims } from "./user"
 
 /** Fetch API-compatible function that sends the HTTP requests to the provider. */
@@ -12,10 +12,11 @@ export type OidcFetch = (url: string, init: RequestInit) => Promise<Response>
  * When the sign-in requests the UserInfo endpoint.
  *
  * - `auto`: when the ID token has no `email` or no `email_verified`.
+ * - `email`: when the ID token has no `email`; for an application that does not use `emailVerified`.
  * - `always`: on every sign-in.
  * - `never`: never; the user has only the ID token claims.
  */
-export type OidcUserinfoMode = "auto" | "always" | "never"
+export type OidcUserinfoMode = "auto" | "email" | "always" | "never"
 
 /** How a client with a secret authenticates to the token endpoint. */
 export type OidcClientAuthentication = "client_secret_basic" | "client_secret_post"
@@ -188,12 +189,7 @@ export function createOidcLogin({
 
       // `idTokenExpected` makes openid-client reject a response without an ID token.
       const claims = tokens.claims()!
-      const standardClaims = readStandardClaims(claims)
-      const needsUserinfo =
-        userinfo === "always" ||
-        (userinfo === "auto" &&
-          (!standardClaims.email || standardClaims.email_verified === undefined))
-      if (!needsUserinfo) {
+      if (!isUserinfoNeeded(userinfo, readStandardClaims(claims))) {
         return createOidcUser(claims)
       }
 
@@ -244,6 +240,20 @@ export function createOidcLogin({
         error,
       })
     },
+  }
+}
+
+/** Checks whether the sign-in requests the UserInfo endpoint for the claims of the ID token. */
+function isUserinfoNeeded(mode: OidcUserinfoMode, claims: StandardClaims): boolean {
+  switch (mode) {
+    case "auto":
+      return !claims.email || claims.email_verified === undefined
+    case "email":
+      return !claims.email
+    case "always":
+      return true
+    case "never":
+      return false
   }
 }
 

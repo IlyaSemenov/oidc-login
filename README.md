@@ -118,7 +118,7 @@ Call `checkClient` when an administrator checks the settings, not as a periodic 
 
 - `scope`: scopes to request besides `openid`, `email`, and `profile`.
 - `userinfo`: when to request the UserInfo endpoint.
-  `auto`, the default, requests it when the ID token has no `email` or `email_verified`; `always` requests it on every sign-in; `never` uses only the ID token.
+  `auto`, the default, requests it when the ID token has no `email` or `email_verified`; `email` requests it only when the ID token has no `email`, for an application that does not use `emailVerified`; `always` requests it on every sign-in; `never` uses only the ID token.
 - `clientSecret`: omit it for a public client.
 - `clientAuthentication`: how to send the client secret to the token endpoint.
   `client_secret_basic`, the default, sends it in the `Authorization` header; `client_secret_post` sends it in the request body, for providers that accept only that.

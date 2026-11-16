@@ -301,6 +301,39 @@ describe("UserInfo", () => {
     })
   })
 
+  test("is requested in the auto mode when the ID token has an email without email_verified", async () => {
+    const context = createLogin({
+      getUser: () => ({ sub: "user-1", claims: { email: "user-1@example.com" } }),
+    })
+    const { flow, callbackUrl } = await authorize(context)
+
+    const user = await context.login.finish(flow, callbackUrl)
+
+    expect(user.userinfo).toMatchObject({ sub: "user-1" })
+  })
+
+  test("is not requested in the email mode when the ID token has an email without email_verified", async () => {
+    const context = createLogin({
+      getUser: () => ({ sub: "user-1", claims: { email: "user-1@example.com" } }),
+      userinfo: "email",
+    })
+    const { flow, callbackUrl } = await authorize(context)
+
+    const user = await context.login.finish(flow, callbackUrl)
+
+    expect(user).toMatchObject({ email: "user-1@example.com", emailVerified: undefined })
+    expect(user.userinfo).toBeUndefined()
+  })
+
+  test("fills the email that the ID token lacks in the email mode", async () => {
+    const context = createLogin({ getUser, userinfo: "email" })
+    const { flow, callbackUrl } = await authorize(context)
+
+    const user = await context.login.finish(flow, callbackUrl)
+
+    expect(user.email).toBe("user-1@example.com")
+  })
+
   test("is not requested in the never mode", async () => {
     const context = createLogin({ getUser, userinfo: "never" })
     const { flow, callbackUrl } = await authorize(context)
